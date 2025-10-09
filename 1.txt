@@ -1,80 +1,39 @@
-import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
+import torch
 
+x_data = torch.Tensor([[1.0], [2.0], [3.0]])
+y_data = torch.Tensor([[2.0], [4.0], [6.0]])
 
-# ä»CSVæ–‡ä»¶è¯»å–æ•°æ®
-def load_data(filename):
-    # ä½¿ç”¨æ¨èçš„sepå‚æ•°ä»£æ›¿å·²å¼ƒç”¨çš„delim_whitespace
-    df = pd.read_csv(filename, sep='\s+', skiprows=1, header=None, names=['x', 'y'])
-    # ç¡®ä¿æ•°æ®è½¬æ¢ä¸ºæ•°å€¼ç±»å‹
-    return df['x'].astype(float).values, df['y'].astype(float).values
-# åŠ è½½æ•°æ®
-try:
-    x_data, y_data = load_data('C:\\Users\\26å·ä¿¡ä½¿\\Desktop\\train.csv')
-    print(f"æˆåŠŸåŠ è½½ {len(x_data)} ä¸ªæ•°æ®ç‚¹")
-except Exception as e:
-    print(f"æ•°æ®åŠ è½½é”™è¯¯: {e}")
-    # ä½¿ç”¨ç¤ºä¾‹æ•°æ®ä½œä¸ºå¤‡ç”¨
-    x_data = np.array([1.0, 2.0, 3.0], dtype=np.float64)
-    y_data = np.array([2.0, 4.0, 6.0], dtype=np.float64)
-    print("ä½¿ç”¨ç¤ºä¾‹æ•°æ®")
+class LinearModel(torch.nn.Module):
+    def __init__(self):  # ĞŞÕı£ºÌí¼ÓÕıÈ·µÄË«ÏÂ»®Ïß
+        super(LinearModel, self).__init__()  # ĞŞÕı£ºÌí¼ÓÕıÈ·µÄË«ÏÂ»®Ïß
+        self.linear = torch.nn.Linear(1, 1)  # ¶¨ÒåÏßĞÔ²ã£¬ÊäÈëÊä³öÎ¬¶È¶¼ÊÇ1
 
+    def forward(self, x):
+        y_pred = self.linear(x)
+        return y_pred
 
-# æ¨¡å‹å®šä¹‰ï¼ˆå«åç½®é¡¹bï¼‰
-def forward(x, w, b):
-    # ç¡®ä¿xæ˜¯æ•°å€¼ç±»å‹ï¼Œè€Œä¸æ˜¯åºåˆ—
-    if isinstance(x, (list, np.ndarray)):
-        # å¦‚æœxæ˜¯æ•°ç»„ï¼Œç¡®ä¿ä½¿ç”¨å…ƒç´ çº§ä¹˜æ³•
-        return w * np.array(x, dtype=np.float64) + b
-    else:
-        # å¦‚æœxæ˜¯å•ä¸ªæ•°å€¼
-        return w * x + b
+model = LinearModel()
 
+# ¶¨ÒåËğÊ§º¯Êı£¨¾ù·½Îó²î£©
+criterion = torch.nn.MSELoss(size_average=False)
+# ¶¨ÒåÓÅ»¯Æ÷£¨Ëæ»úÌİ¶ÈÏÂ½µ£©
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
 
-# æŸå¤±å‡½æ•°
-def loss(x, y, w, b):
-    y_pred = forward(x, w, b)
-    return (y_pred - y) ** 2
+# ÑµÁ·Ñ­»·
+for epoch in range(1000):
+    y_pred = model(x_data)  # Ç°Ïò´«²¥£º¼ÆËãÔ¤²âÖµ
+    loss = criterion(y_pred, y_data)  # ¼ÆËãËğÊ§
+    print(epoch, loss.item())  # ´òÓ¡µ±Ç°ÂÖ´ÎºÍËğÊ§Öµ
 
+    optimizer.zero_grad()  # Ìİ¶ÈÇåÁã
+    loss.backward()  # ·´Ïò´«²¥£º¼ÆËãÌİ¶È
+    optimizer.step()  # ²ÎÊı¸üĞÂ
 
-# å‚æ•°èŒƒå›´è®¾ç½®
-w_range = np.arange(0.0, 4.1, 0.1)  # wèŒƒå›´
-mse_list = []
+# Êä³öÑµÁ·µÃµ½µÄÈ¨ÖØºÍÆ«ÖÃ
+print('w = ', model.linear.weight.item())
+print('b = ', model.linear.bias.item())
 
-# è®¡ç®—ä¸åŒwå€¼çš„MSEï¼ˆå›ºå®šb=0ç®€åŒ–æ¨¡å‹ï¼‰
-for w in w_range:
-    l_sum = 0
-    for x_val, y_val in zip(x_data, y_data):
-        # ç¡®ä¿x_valæ˜¯å•ä¸ªæ•°å€¼è€Œä¸æ˜¯åºåˆ—
-        if isinstance(x_val, (list, np.ndarray)) and len(x_val) > 0:
-            # å¦‚æœx_valæ˜¯åºåˆ—ï¼Œå–ç¬¬ä¸€ä¸ªå…ƒç´ 
-            x_val = x_val[0] if hasattr(x_val, '__getitem__') else float(x_val)
-
-        # å°†x_valè½¬æ¢ä¸ºæµ®ç‚¹æ•°ä»¥ç¡®ä¿ç±»å‹åŒ¹é…
-        x_val_float = float(x_val)
-        loss_val = loss(x_val_float, y_val, w, 0)  # ç®€åŒ–æ¨¡å‹ï¼Œè®¾b=0
-        l_sum += loss_val
-
-    mse = l_sum / len(x_data)
-    mse_list.append(mse)
-    print(f"w={w:.1f}, MSE={mse:.4f}")
-
-# æ‰¾åˆ°ä½¿MSEæœ€å°çš„wå€¼
-min_mse = min(mse_list)
-min_w_index = mse_list.index(min_mse)
-min_w = w_range[min_w_index]
-
-print(f"\næœ€ä½³å‚æ•°: w={min_w:.2f}")
-print(f"æœ€å°MSE: {min_mse:.4f}")
-
-# ç»˜åˆ¶MSEéšwå˜åŒ–çš„æ›²çº¿
-plt.figure(figsize=(10, 6))
-plt.plot(w_range, mse_list, 'b-', label='MSE')
-plt.scatter(min_w, min_mse, color='red', s=100, label=f'Min MSE (w={min_w:.2f})')
-plt.xlabel('Weight (w)')
-plt.ylabel('MSE Loss')
-plt.title('MSE vs Weight Parameter')
-plt.legend()
-plt.grid(True)
-plt.show()
+# ²âÊÔÄ£ĞÍ
+x_test = torch.Tensor([[4.0]])
+y_test = model(x_test)
+print('y_pred = ', y_test.data)
