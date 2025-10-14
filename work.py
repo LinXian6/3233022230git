@@ -1,260 +1,176 @@
 import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader, random_split
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 
 
-# 方案1：直接指定支持负号的中文字体（Windows 系统优先）
-plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'DejaVu Sans', 'Arial']  # 微软雅黑支持负号
-plt.rcParams['axes.unicode_minus'] = True  # 保持开启，使用 Unicode 负号
-
-data = pd.read_csv('train.csv')
-data = data.dropna()
-
-x_data = torch.Tensor(data['x'].values).reshape(-1, 1)
-y_data = torch.Tensor(data['y'].values).reshape(-1, 1)
+# 读取数据集
+try:
+    data = pd.read_csv('countries.csv')
+    print(f"✅ 成功读取数据集，共 {len(data)} 行原始数据")
+except FileNotFoundError:
+    raise FileNotFoundError("❌ 未找到 countries.csv 文件，请确认文件路径正确！")
 
 
-class LinearModel(torch.nn.Module):
+# 定义数据集类（含缺失值删除+数据类型转换）
+class MyDataset(Dataset):
+    def __init__(self, data):
+        # 删除包含 nan 值的行
+        self.data = data.dropna()
+        print(f"✅ 删除缺失值后，剩余有效数据 {len(self.data)} 行")
+
+        # 特征列（7个输入特征）和目标列（总生态足迹）
+        self.feat_cols = ['Population (millions)', 'HDI', 'Cropland Footprint',
+                          'Grazing Footprint', 'Forest Footprint', 'Carbon Footprint',
+                          'Fish Footprint']
+        self.x = self.data[self.feat_cols].values
+        self.y = self.data['Total Ecological Footprint'].values
+
+        # 转换为PyTorch张量（float32类型，避免精度问题）
+        self.x = torch.tensor(self.x, dtype=torch.float32)
+        self.y = torch.tensor(self.y, dtype=torch.float32).unsqueeze(1)  # 扩展为列向量
+
+        # 输出数据基本信息，方便排查异常
+        print(f"📊 特征数据形状: {self.x.shape}, 目标数据形状: {self.y.shape}")
+        print(f"📈 目标值范围: {self.y.min().item():.2f} ~ {self.y.max().item():.2f}")
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.x[idx], self.y[idx]
+
+
+# 实例化数据集并分割训练/测试集（8:2分割）
+dataset = MyDataset(data)
+train_size = int(0.8 * len(dataset))
+test_size = len(dataset) - train_size
+train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+
+# 数据加载器（批量处理+打乱）
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=0)
+test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=0)
+print(f"🔧 训练集批次数量: {len(train_loader)} (每批16个样本)")
+print(f"🔧 测试集批次数量: {len(test_loader)} (每批16个样本)")
+
+
+
+class Net(nn.Module):
     def __init__(self):
-        super(LinearModel, self).__init__()
-        self.linear = torch.nn.Linear(1, 1)
-        # 初始化权重参数w和偏置参数b，使其满足正态分布
-        torch.nn.init.normal_(self.linear.weight, mean=0.0, std=0.1)
-        torch.nn.init.normal_(self.linear.bias, mean=0.0, std=0.1)
+        super(Net, self).__init__()
+        # 输入层(7)→隐藏层1(7)→隐藏层2(6)→隐藏层3(5)→输出层(1)
+        self.fc1 = nn.Linear(7, 7)  # 第1层：7输入→7输出
+        self.fc2 = nn.Linear(7, 6)  # 第2层：7输入→6输出
+        self.fc3 = nn.Linear(6, 5)  # 第3层：6输入→5输出
+        self.fc4 = nn.Linear(5, 1)  # 输出层：5输入→1输出（回归任务无激活）
+        self.relu = nn.ReLU()  # ReLU激活函数（统一定义，避免重复）
 
     def forward(self, x):
-        y_pred = self.linear(x)
-        return y_pred
+        # 前向传播：输入→ReLU→输入→ReLU→输入→ReLU→输出
+        x = self.relu(self.fc1(x))
+        x = self.relu(self.fc2(x))
+        x = self.relu(self.fc3(x))
+        x = self.fc4(x)
+        return x
 
 
-def train_with_optimizer(optimizer_name, lr=0.001, epochs=1000):
-    """使用不同优化器训练模型"""
-    model = LinearModel()
-    criterion = torch.nn.MSELoss(reduction='mean')  # 使用mean避免数值过大
 
-    # 为不同优化器设置合适的学习率
-    if optimizer_name == 'SGD':
-        optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    elif optimizer_name == 'Adam':
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.01)  # Adam通常需要更大学习率
-    elif optimizer_name == 'Adagrad':
-        optimizer = torch.optim.Adagrad(model.parameters(), lr=0.1)  # Adagrad需要更大学习率
+# 实例化模型、损失函数（MSE）、优化器（Adam）
+model = Net()
+criterion = nn.MSELoss()  # 回归任务常用MSE损失
+optimizer = optim.Adam(model.parameters(), lr=0.001)  # Adam优化器（比SGD更稳定）
 
-    losses = []
-    weights = []
-    biases = []
+# 训练参数
+num_epochs = 100
+train_losses = []  # 存储训练损失
+test_losses = []  # 存储测试损失
+best_loss = float('inf')  # 记录最佳测试损失（用于保存最优模型）
 
-    for epoch in range(epochs):
-        y_pred = model(x_data)
-        loss = criterion(y_pred, y_data)
+# 初始化Matplotlib图像（设置样式，支持实时更新）
+plt.rcParams['font.sans-serif'] = ['DejaVu Sans']  # 支持英文标签
+plt.rcParams['axes.unicode_minus'] = False  # 支持负号显示
+fig, ax = plt.subplots(figsize=(10, 6))  # 设置图像大小
+ax.set_xlabel('Epoch', fontsize=12)
+ax.set_ylabel('MSE Loss', fontsize=12)
+ax.set_title('Training vs Test Loss (5-Layer Neural Network)', fontsize=14, pad=20)
+ax.grid(True, alpha=0.3)  # 添加网格线，方便读数
 
-        # 检查NaN
-        if torch.isnan(loss):
-            print(f"{optimizer_name} - Epoch {epoch}: Loss is NaN")
-            break
-
+# 训练循环
+for epoch in range(num_epochs):
+    model.train()  # 开启训练模式（启用Dropout等，此处无但规范保留）
+    running_train_loss = 0.0
+    for batch_idx, (x_batch, y_batch) in enumerate(train_loader):
+        # 梯度清零→前向传播→计算损失→反向传播→参数更新
         optimizer.zero_grad()
+        y_pred = model(x_batch)
+        loss = criterion(y_pred, y_batch)
         loss.backward()
-
-        # 梯度裁剪防止爆炸
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
         optimizer.step()
 
-        if epoch % 10 == 0:
-            losses.append(loss.item())
-            weights.append(model.linear.weight.item())
-            biases.append(model.linear.bias.item())
+        running_train_loss += loss.item()  # 累加批次损失
 
-    final_w = model.linear.weight.item()
-    final_b = model.linear.bias.item()
+    # 计算本轮训练平均损失
+    avg_train_loss = running_train_loss / len(train_loader)
+    train_losses.append(avg_train_loss)
 
-    print(
-        f"{optimizer_name} 最终参数: w={final_w:.6f}, b={final_b:.6f}, 最终损失: {losses[-1] if losses else 'NaN':.2f}")
+    # -------------------------- 测试阶段 --------------------------
+    model.eval()  # 开启评估模式（禁用Dropout等）
+    running_test_loss = 0.0
+    with torch.no_grad():  # 禁用梯度计算，加速并避免内存占用
+        for x_batch, y_batch in test_loader:
+            y_pred = model(x_batch)
+            loss = criterion(y_pred, y_batch)
+            running_test_loss += loss.item()
 
-    return losses, weights, biases, final_w, final_b
+    # 计算本轮测试平均损失
+    avg_test_loss = running_test_loss / len(test_loader)
+    test_losses.append(avg_test_loss)
 
+    # -------------------------- 保存最优模型 --------------------------
+    if avg_test_loss < best_loss:
+        best_loss = avg_test_loss
+        torch.save(model.state_dict(), 'best_model.pt')
+        print(f"📌 Epoch {epoch}: 测试损失下降至 {best_loss:.4f}，保存最优模型")
 
-# 1. 比较不同优化器的性能
-print("=" * 50)
-print("不同优化器性能比较")
-print("=" * 50)
-
-optimizers = ['SGD', 'Adam', 'Adagrad']
-results = {}
-
-plt.figure(figsize=(15, 10))
-
-for i, opt in enumerate(optimizers):
-    print(f"\n训练 {opt} 优化器...")
-    losses, weights, biases, final_w, final_b = train_with_optimizer(opt, epochs=1000)
-    results[opt] = {
-        'losses': losses,
-        'weights': weights,
-        'biases': biases,
-        'final_w': final_w,
-        'final_b': final_b
-    }
-
-    # 绘制损失曲线
-    plt.subplot(2, 3, i + 1)
-    plt.plot(losses)
-    plt.title(f'{opt}优化器 - 损失曲线')
-    plt.xlabel('训练轮次 (x10)')
-    plt.ylabel('损失值')
-    plt.grid(True)
-
-# 2. 参数调节过程可视化
-print("\n" + "=" * 50)
-print("参数调节过程可视化")
-print("=" * 50)
-
-# 使用SGD进行详细参数调节可视化
-model = LinearModel()
-criterion = torch.nn.MSELoss(reduction='mean')
-optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
-
-weights_history = []
-biases_history = []
-losses_history = []
-
-print("初始化参数:")
-print(f"w (初始): {model.linear.weight.item():.6f}")
-print(f"b (初始): {model.linear.bias.item():.6f}")
-
-for epoch in range(1000):
-    y_pred = model(x_data)
-    loss = criterion(y_pred, y_data)
-
-    optimizer.zero_grad()
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    optimizer.step()
 
     if epoch % 10 == 0:
-        weights_history.append(model.linear.weight.item())
-        biases_history.append(model.linear.bias.item())
-        losses_history.append(loss.item())
+        print(f"Epoch [{epoch:3d}/{num_epochs}]: "
+              f"Train Loss = {avg_train_loss:.4f}, "
+              f"Test Loss = {avg_test_loss:.4f}")
 
-# 参数w和b的调节过程
-plt.subplot(2, 3, 4)
-plt.plot(weights_history, label='权重 w')
-plt.plot(biases_history, label='偏置 b')
-plt.title('参数 w 和 b 的调节过程')
-plt.xlabel('训练轮次 (x10)')
-plt.ylabel('参数值')
-plt.legend()
-plt.grid(True)
-
-# 参数空间轨迹
-plt.subplot(2, 3, 5)
-plt.plot(weights_history, biases_history, 'b-', alpha=0.7)
-plt.scatter(weights_history[0], biases_history[0], color='red', label='起始点', s=50)
-plt.scatter(weights_history[-1], biases_history[-1], color='green', label='最终点', s=50)
-plt.title('参数空间轨迹 (w-b)')
-plt.xlabel('权重 w')
-plt.ylabel('偏置 b')
-plt.legend()
-plt.grid(True)
-
-# 3. 学习率和epoch调节可视化
-print("\n" + "=" * 50)
-print("学习率和epoch调节可视化")
-print("=" * 50)
+    if (epoch + 1) % 5 == 0 or epoch == num_epochs - 1:
+        ax.clear()  # 清空上一轮图像
+        # 绘制训练/测试损失曲线（添加曲线标签）
+        ax.plot(range(1, epoch + 2), train_losses,
+                label='Train Loss', color='#2E86AB', linewidth=2.5, marker='o', markersize=3)
+        ax.plot(range(1, epoch + 2), test_losses,
+                label='Test Loss', color='#A23B72', linewidth=2.5, marker='s', markersize=3)
+        # 标注最佳测试损失点
+        best_epoch = test_losses.index(best_loss) + 1
+        ax.scatter(best_epoch, best_loss, color='red', s=80, zorder=5,
+                   label=f'Best Test Loss: {best_loss:.4f} (Epoch {best_epoch})')
+        # 重新设置标签和网格
+        ax.set_xlabel('Epoch', fontsize=12)
+        ax.set_ylabel('MSE Loss', fontsize=12)
+        ax.set_title('Training vs Test Loss (5-Layer Neural Network)', fontsize=14, pad=20)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=10)
+        plt.pause(0.1)  # 暂停0.1秒，让图像更新
 
 
-def train_with_hyperparams(lr, epochs):
-    """使用不同超参数训练模型"""
-    model = LinearModel()
-    criterion = torch.nn.MSELoss(reduction='mean')
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-
-    final_loss = float('inf')
-    for epoch in range(epochs):
-        y_pred = model(x_data)
-        loss = criterion(y_pred, y_data)
-
-        if torch.isnan(loss):
-            break
-
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
-
-        if epoch == epochs - 1:
-            final_loss = loss.item()
-
-    return final_loss
-
-
-# 测试不同学习率（使用更安全的范围）
-learning_rates = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
-lr_losses = []
-for lr in learning_rates:
-    loss = train_with_hyperparams(lr, 500)
-    lr_losses.append(loss)
-    print(f"学习率 {lr:.2e}: 最终损失 = {loss:.2f}")
-
-# 测试不同epoch数量
-epochs_list = [100, 200, 500, 1000, 2000]
-epoch_losses = []
-for epochs in epochs_list:
-    loss = train_with_hyperparams(0.001, epochs)
-    epoch_losses.append(loss)
-    print(f"训练轮次 {epochs}: 最终损失 = {loss:.2f}")
-
-# 学习率影响可视化
-plt.subplot(2, 3, 6)
-plt.semilogx(learning_rates, lr_losses, 'ro-', linewidth=2, markersize=6)
-plt.title('学习率对最终损失的影响')
-plt.xlabel('学习率 (对数尺度)')
-plt.ylabel('最终损失')
-plt.grid(True)
-
-plt.tight_layout()
-plt.savefig('optimization_visualization.png', dpi=300, bbox_inches='tight')
+plt.tight_layout()  # 自动调整布局，避免标签被截断
+plt.savefig('training_test_loss.png', dpi=300, bbox_inches='tight')  # 高分辨率保存
 plt.show()
 
-# 单独绘制epoch影响图
-plt.figure(figsize=(10, 6))
-plt.plot(epochs_list, epoch_losses, 'go-', linewidth=2, markersize=8)
-plt.title('训练轮次对最终损失的影响')
-plt.xlabel('训练轮次数量')
-plt.ylabel('最终损失')
-plt.grid(True)
-plt.savefig('epoch_impact.png', dpi=300, bbox_inches='tight')
-plt.show()
 
-# 最终结果汇总
 print("\n" + "=" * 50)
-print("最终结果汇总")
+print("训练完成！")
+print(f"📊 最终训练损失: {train_losses[-1]:.4f}")
+print(f"📊 最终测试损失: {test_losses[-1]:.4f}")
+print(f"🏆 最佳测试损失: {best_loss:.4f} (对应Epoch {best_epoch})")
+print(f"💾 最优模型已保存至: best_model.pt")
+print(f"💾 损失可视化图已保存至: training_test_loss.png")
 print("=" * 50)
-for opt in optimizers:
-    result = results[opt]
-    print(f"{opt}: w = {result['final_w']:.6f}, b = {result['final_b']:.6f}")
-
-# 使用最佳参数进行最终预测
-print("\n" + "=" * 50)
-print("最终预测")
-print("=" * 50)
-
-final_model = LinearModel()
-criterion = torch.nn.MSELoss(reduction='mean')
-optimizer = torch.optim.SGD(final_model.parameters(), lr=0.001)
-
-print(f"初始参数: w={final_model.linear.weight.item():.6f}, b={final_model.linear.bias.item():.6f}")
-
-for epoch in range(1000):
-    y_pred = final_model(x_data)
-    loss = criterion(y_pred, y_data)
-    optimizer.zero_grad()
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(final_model.parameters(), max_norm=1.0)
-    optimizer.step()
-
-print(f"最终参数: w={final_model.linear.weight.item():.6f}, b={final_model.linear.bias.item():.6f}")
-
-x_test = torch.Tensor([[4.0]])
-y_test = final_model(x_test)
-print(f"预测结果 x=4.0: y_pred={y_test.data.item():.6f}")
