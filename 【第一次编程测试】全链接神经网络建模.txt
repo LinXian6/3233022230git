@@ -1,0 +1,223 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings
+warnings.filterwarnings('ignore')
+
+# --------------------------
+# 关键修复：更换matplotlib后端（解决tostring_rgb错误）
+# --------------------------
+# 优先使用TkAgg后端（兼容性强，若仍报错可尝试Qt5Agg）
+try:
+    plt.switch_backend('TkAgg')
+except:
+    try:
+        plt.switch_backend('Qt5Agg')
+    except:
+        # 若上述后端均不可用，使用Agg后端（仅保存图片不弹窗显示）
+        plt.switch_backend('Agg')
+
+# 解决中文显示问题（兼容Windows/Linux/macOS）
+plt.rcParams['font.sans-serif'] = ['SimHei', 'WenQuanYi Zen Hei', 'Microsoft YaHei', 'Arial Unicode MS']
+plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示异常
+
+
+# --------------------------
+# 2. 数据加载与预处理
+# --------------------------
+def load_and_preprocess_data(file_path=r'C:\Users\26号信使\Desktop\student-por.csv'):
+    """加载数据集并预处理，处理数据类型和缺失值"""
+    df = pd.read_csv(
+        file_path,
+        sep=',',
+        quotechar='"',
+        encoding='utf-8'
+    )
+
+    # 成绩列转为数值型（处理可能的字符串格式）
+    score_cols = ['G1', 'G2', 'G3']
+    for col in score_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # 删除成绩缺失的行（核心分析目标不可缺失）
+    df = df.dropna(subset=score_cols)
+
+    # 分类变量中文映射（便于可视化解读）
+    cat_maps = {
+        'school': {'GP': '公立学校', 'MS': '私立学校'},
+        'sex': {'F': '女性', 'M': '男性'},
+        'address': {'U': '城市', 'R': '农村'},
+        'famsize': {'GT3': '家庭人数>3', 'LE3': '家庭人数≤3'},
+        'Pstatus': {'A': '父母分居', 'T': '父母同居'},
+        'schoolsup': {'yes': '有', 'no': '无'},
+        'famsup': {'yes': '有', 'no': '无'},
+        'paid': {'yes': '有', 'no': '无'},
+        'activities': {'yes': '有', 'no': '无'},
+        'nursery': {'yes': '有', 'no': '无'},
+        'higher': {'yes': '是', 'no': '否'},
+        'internet': {'yes': '有', 'no': '无'},
+        'romantic': {'yes': '是', 'no': '否'}
+    }
+    for col, map_dict in cat_maps.items():
+        df[col] = df[col].map(map_dict)
+
+    print(f"数据集基本信息：")
+    print(f"- 样本数量：{len(df)} 条")
+    print(f"- 特征数量：{df.shape[1]} 个")
+    print(f"- 成绩列缺失值：{df[score_cols].isnull().sum().sum()} 个")
+    return df
+
+
+# --------------------------
+# 3. 可视化函数（简化绘图逻辑，避免后端兼容问题）
+# --------------------------
+def plot_score_distribution(df, save_path='score_distribution.png'):
+    """1. 三次成绩分布对比图（独立窗口/文件，避免子图叠加问题）"""
+    score_cols = ['G1', 'G2', 'G3']
+    score_names = ['第一次成绩', '第二次成绩', '最终成绩']
+
+    plt.figure(figsize=(10, 6))
+    for col, name in zip(score_cols, score_names):
+        sns.histplot(df[col], bins=15, alpha=0.7, label=name, kde=True)
+
+    plt.title('三次成绩分布对比', fontsize=14, fontweight='bold')
+    plt.xlabel('成绩分数', fontsize=12)
+    plt.ylabel('学生人数', fontsize=12)
+    plt.legend(fontsize=10)
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\n成绩分布图已保存：{save_path}")
+    # 若使用Agg后端（无弹窗），注释plt.show()
+    if plt.get_backend() not in ['Agg']:
+        plt.show()
+    plt.close()  # 关闭当前图，避免内存占用
+
+
+def plot_categorical_impact(df, cat_col, title_prefix, save_path):
+    """2. 分类变量对成绩的影响（独立绘图，降低后端压力）"""
+    score_cols = ['G1', 'G2', 'G3']
+    score_names = ['第一次成绩', '第二次成绩', '最终成绩']
+
+    plt.figure(figsize=(10, 6))
+    # 转换为长格式数据，便于分组显示
+    df_melt = pd.melt(
+        df,
+        id_vars=[cat_col],
+        value_vars=score_cols,
+        var_name='成绩类型',
+        value_name='成绩'
+    )
+    df_melt['成绩类型'] = df_melt['成绩类型'].map(dict(zip(score_cols, score_names)))
+
+    sns.boxplot(x=cat_col, y='成绩', hue='成绩类型', data=df_melt, palette='Set2')
+    plt.title(f'{title_prefix}对成绩的影响', fontsize=14, fontweight='bold')
+    plt.xlabel(title_prefix, fontsize=12)
+    plt.ylabel('成绩分数', fontsize=12)
+    plt.legend(fontsize=10, bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"{title_prefix}影响图已保存：{save_path}")
+    if plt.get_backend() not in ['Agg']:
+        plt.show()
+    plt.close()
+
+
+def plot_absences_vs_score(df, save_path='absences_vs_score.png'):
+    """3. 缺勤次数与最终成绩关系图"""
+    plt.figure(figsize=(10, 6))
+    # 散点图+拟合线（简化绘图逻辑，避免复杂参数）
+    sns.scatterplot(x='absences', y='G3', data=df, alpha=0.6, s=30, color='#1f77b4')
+    sns.regplot(x='absences', y='G3', data=df, scatter=False, color='#ff7f0e', ci=95)
+
+    plt.title('缺勤次数与最终成绩的关系', fontsize=14, fontweight='bold')
+    plt.xlabel('缺勤次数', fontsize=12)
+    plt.ylabel('最终成绩（G3）', fontsize=12)
+    plt.grid(alpha=0.3)
+    plt.xlim(0, df['absences'].quantile(0.99))  # 过滤极端值
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"缺勤-成绩关系图已保存：{save_path}")
+    if plt.get_backend() not in ['Agg']:
+        plt.show()
+    plt.close()
+
+
+def plot_correlation_heatmap(df, save_path='correlation_heatmap.png'):
+    """4. 数值特征相关性热力图"""
+    # 选择核心数值特征
+    numerical_cols = [
+        'age', 'Medu', 'Fedu', 'traveltime', 'studytime', 'failures',
+        'famrel', 'freetime', 'goout', 'Dalc', 'Walc', 'health', 'absences',
+        'G1', 'G2', 'G3'
+    ]
+    # 中文特征名映射
+    numerical_names = {
+        'age': '年龄', 'Medu': '母亲教育水平', 'Fedu': '父亲教育水平',
+        'traveltime': '通勤时间', 'studytime': '学习时间', 'failures': '不及格次数',
+        'famrel': '家庭关系', 'freetime': '空闲时间', 'goout': '外出频率',
+        'Dalc': '周中饮酒', 'Walc': '周末饮酒', 'health': '健康状况',
+        'absences': '缺勤次数', 'G1': '第一次成绩', 'G2': '第二次成绩', 'G3': '最终成绩'
+    }
+    df_numerical = df[numerical_cols].rename(columns=numerical_names)
+
+    # 计算相关系数矩阵
+    corr_matrix = df_numerical.corr()
+
+    plt.figure(figsize=(12, 10))
+    # 简化热力图参数，避免后端渲染问题
+    sns.heatmap(
+        corr_matrix,
+        annot=True,
+        fmt='.2f',
+        cmap='RdBu_r',
+        center=0,
+        square=True,
+        linewidths=0.5,
+        cbar_kws={'shrink': 0.8}
+    )
+    plt.title('数值型特征相关性热力图', fontsize=14, fontweight='bold')
+    plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=0)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"相关性热力图已保存：{save_path}")
+    if plt.get_backend() not in ['Agg']:
+        plt.show()
+    plt.close()
+
+
+# --------------------------
+# 4. 主函数：分步执行可视化（降低后端并发压力）
+# --------------------------
+def main():
+    # 1. 加载数据
+    df = load_and_preprocess_data()
+
+    # 2. 分步执行可视化（避免多子图同时渲染）
+    print("\n开始生成可视化图表...")
+    plot_score_distribution(df)  # 成绩分布
+    plot_absences_vs_score(df)  # 缺勤-成绩关系
+    # 分类变量影响（性别、学校类型、互联网）
+    plot_categorical_impact(df, 'sex', '性别', 'sex_impact.png')
+    plot_categorical_impact(df, 'school', '学校类型', 'school_impact.png')
+    plot_categorical_impact(df, 'internet', '是否有互联网', 'internet_impact.png')
+    plot_correlation_heatmap(df)  # 相关性热力图
+
+    # 输出核心统计结论
+    print("\n" + "=" * 50)
+    print("核心数据结论：")
+    print(f"1. 最终成绩（G3）：")
+    print(f"   - 平均分：{df['G3'].mean():.2f} | 最高分：{df['G3'].max()} | 最低分：{df['G3'].min()}")
+    print(f"2. 成绩相关性：")
+    print(f"   - G1与G3相关系数：{df['G1'].corr(df['G3']):.2f}（强正相关，早期成绩影响最终成绩）")
+    print(f"   - G2与G3相关系数：{df['G2'].corr(df['G3']):.2f}（更强正相关，中期成绩更关键）")
+    print(f"3. 缺勤影响：")
+    print(f"   - 缺勤次数与G3相关系数：{df['absences'].corr(df['G3']):.2f}（负值表示缺勤越多成绩越低）")
+    print("=" * 50)
+
+
+if __name__ == '__main__':
+    main()
